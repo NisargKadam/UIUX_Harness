@@ -18,6 +18,7 @@ import type { DevServerManager } from "../process/runner";
 import { findFreePort } from "../process/runner";
 import type { PrototypePlan } from "../protocol";
 import { renderMissingComponentsDoc, type SessionState } from "../agent/state";
+import { planSchema } from "../planSchema";
 import { formatCheck, formatDiagnostics, runCheck } from "./checks";
 
 export type ToolResultContent = Exclude<Anthropic.Beta.BetaToolResultBlockParam["content"], string | undefined>;
@@ -246,35 +247,6 @@ const preview: BuiltinTool<typeof previewSchema> = {
 };
 
 // ------------------------------------------------------------------ ask_user
-
-const planSchema = z.object({
-  prototypeName: z.string().describe('Short kebab-case folder name, e.g. "account-settings".'),
-  title: z.string(),
-  summary: z.string().describe("One or two sentences in plain language."),
-  screens: z
-    .array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        route: z.string().describe('Hash route, e.g. "/settings/profile".'),
-        purpose: z.string(),
-        components: z.array(z.string()).describe("Catalogue components this screen uses."),
-      }),
-    )
-    .min(1),
-  flow: z.array(z.object({ from: z.string(), action: z.string(), to: z.string() })),
-  missingComponents: z
-    .array(
-      z.object({
-        need: z.string(),
-        usingInstead: z.string(),
-        reason: z.string(),
-        screens: z.array(z.string()).optional(),
-      }),
-    )
-    .default([]),
-  assumptions: z.array(z.string()).default([]),
-});
 
 const askUserSchema = z.object({
   question: z.string().describe("Plain language, no jargon. For a plan: \"Shall I build this?\""),

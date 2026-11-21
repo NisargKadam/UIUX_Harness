@@ -22,7 +22,8 @@ export interface CheckResult {
 }
 
 const LINT_NOT_CONFIGURED = /(couldn't find (an )?(eslint\.config|a configuration file)|No ESLint configuration found|could not find config file)/i;
-const TOOL_MISSING = /(command not found|not recognized as an internal|could not determine executable to run|ENOENT)/i;
+// Matched only when no diagnostics were parsed (an "ENOENT" inside a lint message must not count).
+const TOOL_MISSING = /(command not found|is not recognized as an internal or external command|could not determine executable to run|npx canceled due to missing packages|^Error: spawn \S+ ENOENT)/im;
 
 export async function runCheck(
   command: "typecheck" | "lint",
@@ -40,13 +41,13 @@ export async function runCheck(
   const result = await runToCompletion(cmd, config.workspaceRoot, { timeoutMs: 180_000, signal });
   const output = result.output;
   const rawTail = output.split(/\r?\n/).slice(-60).join("\n");
-  if (command === "lint" && LINT_NOT_CONFIGURED.test(output)) {
+  const diagnostics = command === "typecheck" ? adapter.parseTypecheckOutput(output, config.workspaceRoot) : adapter.parseLintOutput(output, config.workspaceRoot);
+  if (command === "lint" && result.exitCode !== 0 && diagnostics.length === 0 && LINT_NOT_CONFIGURED.test(output)) {
     return { ...base, ran: false, passed: true, skippedReason: "Linting isn't set up in this workspace.", rawTail, exitCode: result.exitCode };
   }
-  if (result.exitCode !== 0 && TOOL_MISSING.test(output) && !/error TS\d+/.test(output)) {
-    return { ...base, ran: false, passed: true, skippedReason: `The ${command} tool isn't installed: ${rawTail.split("\n").pop()}`, rawTail, exitCode: result.exitCode };
+  if (result.exitCode !== 0 && diagnostics.length === 0 && TOOL_MISSING.test(output)) {
+    return { ...base, ran: false, passed: true, skippedReason: `The ${command} tool isn't installed in this project.`, rawTail, exitCode: result.exitCode };
   }
-  const diagnostics = command === "typecheck" ? adapter.parseTypecheckOutput(output, config.workspaceRoot) : adapter.parseLintOutput(output, config.workspaceRoot);
   const prefix = `${protoRelDir}/`;
   const inPrototype = diagnostics.filter((d) => d.file.startsWith(prefix));
   const elsewhere = diagnostics.filter((d) => !d.file.startsWith(prefix));

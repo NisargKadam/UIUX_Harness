@@ -8,6 +8,7 @@ import { defaultConfig } from "../../src/core/config";
 import type { HarnessHost } from "../../src/core/host";
 import { DevServerManager } from "../../src/core/process/runner";
 import { findBuiltin, mergeDiagnostics } from "../../src/core/tools/builtin";
+import { runCheck } from "../../src/core/tools/checks";
 
 const WS = path.resolve(__dirname, "../../sample-workspace");
 const NAME = "unit-diagnostics";
@@ -41,6 +42,19 @@ describe("get_diagnostics", () => {
     expect(text).toContain("Unexpected console statement"); // from the editor
     expect(text).toMatch(/TS2322.*huge/); // from tsc
     expect(text).toMatch(/1 from the editor, 1 from the type checker/);
+  });
+
+  it("a lint error mentioning ENOENT still fails the gate (review finding)", async () => {
+    const file = path.join(DIR, "Probe.ts");
+    fs.writeFileSync(file, "export function probe() {\n  const ENOENT = 1;\n  return 2;\n}\n");
+    try {
+      const r = await runCheck("lint", config, adapter, `prototypes/${NAME}`);
+      expect(r.ran).toBe(true);
+      expect(r.passed).toBe(false);
+      expect(r.inPrototype.some((d) => d.message.includes("ENOENT"))).toBe(true);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
   });
 
   it("de-duplicates the same problem reported by both sources", () => {

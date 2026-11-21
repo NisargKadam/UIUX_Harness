@@ -98,13 +98,21 @@ All settings are under **Settings → Extensions → UIUX Harness** (`uiuxHarnes
 | `storybookUrl` | *(empty)* | e.g. `http://localhost:6006`. Enables the Storybook catalogue. |
 | `prototypeFolder` | `prototypes` | Where prototypes go. The agent cannot write anywhere else. |
 | `framework` | `auto` | Framework adapter (`react-vite` today). |
-| `devServerCommand` | `npx vite --config {protoDir}/vite.config.mjs --port {port} --strictPort` | Starts the preview server. |
-| `typecheckCommand` | `npx tsc --noEmit -p {protoDir}/tsconfig.json` | Type check. |
-| `lintCommand` | `npx eslint {protoDir}` | Lint (leave empty to skip). |
+| `devServerCommand` | `npx --no-install vite --config {protoDir}/vite.config.mjs --port {port} --strictPort` | Starts the preview server. |
+| `typecheckCommand` | `npx --no-install tsc --noEmit -p {protoDir}/tsconfig.json` | Type check. |
+| `lintCommand` | `npx --no-install eslint {protoDir}` | Lint (leave empty to skip). |
 | `maxFixAttempts` / `maxReviewRounds` / `maxTurns` | `3` / `3` / `80` | Retry and safety limits. |
 | `mcp.figma` / `mcp.storybook` / `mcp.playwright` | see below | MCP server connections. |
 
-Commands are allowlisted. They must start with `npx`, `npm`, `pnpm`, `yarn`, `bun`, `node`, `vite`, `tsc` or `eslint`, and `npx` may only run `vite`, `tsc` or `eslint`. Shell features (`&&`, `|`, `;`, `$()`, globs) are rejected. The agent picks a command by name (`dev_server`, `typecheck`, `lint`) and never types one.
+Commands are allowlisted. The agent picks a command by name (`dev_server`, `typecheck`, `lint`) and never types one. The templates in your settings are checked too:
+- They must start with `npx`, `npm`, `pnpm`, `yarn`, `bun`, `node`, `vite`, `tsc` or `eslint`.
+- `npx` may only run `vite`, `tsc` or `eslint`, as plain package names. No `--package`, no `--registry`, no git/URL/`npm:` specs.
+- Package managers may only `run` your scripts or `exec` those tools.
+- `node` may only run a script under `node_modules/`.
+- Shell features (`&&`, `|`, `;`, `$()`, globs) are rejected.
+- The defaults use `npx --no-install`, so a missing tool is reported instead of being downloaded.
+
+These checks are defence in depth, not a sandbox. A project whose settings you trust can still run its own code, for example through its own Vite config. That is why the extension only runs in **trusted** workspaces.
 
 **Your own skills.** The four skills that steer quality ship with the extension in `skills/`. To tune one for your design system, copy it to `.uiux-harness/skills/<name>/SKILL.md` in your project and edit it. The workspace copy wins.
 
@@ -140,7 +148,9 @@ The harness always has a catalogue:
 
 Default: `{"enabled": true, "command": "npx", "args": ["-y", "@playwright/mcp@0.0.86", "--headless", "--isolated", "--viewport-size", "1280x800", "--output-dir", ".uiux-harness/playwright"]}`.
 
-Nothing to set up beyond Node. The first run downloads the Playwright MCP package and a browser, which takes a minute. Screenshots and snapshots go to `.uiux-harness/playwright/` (gitignored). Tools that run arbitrary code (`browser_run_code_unsafe`) or upload local files are filtered out. Set `enabled: false` to skip visual self-review. Type and lint checks still run.
+Nothing to set up beyond Node. The first run downloads the pinned Playwright MCP package and a browser, which takes a minute. Set `enabled: false` to skip visual self-review. Type and lint checks still run.
+
+The browser server runs in a throwaway temp folder, not your project. Only navigation, clicking, typing, snapshots, screenshots and console reading are exposed. Code evaluation, file upload, storage dumps and the tools' `filename` option (which writes files) are all removed.
 
 ---
 
@@ -162,7 +172,11 @@ What's happening ◄─────┘            │                    ├─ 
 - **Agent loop.** Runs directly on the Anthropic Messages API, not the Claude Agent SDK. The Agent SDK spawns a ~350 MB native binary per platform, and the write restriction is simplest to guarantee in-process. See [docs/adr/0001-agent-loop.md](docs/adr/0001-agent-loop.md).
 - **Guard rails are code, not prompts.**
   - Plan first: `write_file` refuses until you approve a plan.
-  - Writes are confined to `prototypes/<name>/`. The guard resolves `..` and symlinks, blocks secrets-like files, and reserves build configs such as `vite.config.*`, `eslint.config.*`, `package.json` and `tsconfig*.json`, because the dev server would execute them.
+  - Writes are confined to `prototypes/<name>/`. The guard:
+    - resolves `..` and symlinks, and accepts ASCII file names only, which blocks Unicode look-alikes and Windows 8.3 short names
+    - blocks secrets-like files
+    - reserves build configs (`vite.config.*`, `eslint.config.*`, `package.json`, `tsconfig*.json`, …), because the dev server would execute them
+    - reserves the harness's own `.harness/` state
   - Commands are chosen by name only.
   - "Done" means the type check and lint pass. The loop sends the model back to fix errors, up to `maxFixAttempts`, then reports what's left.
 - **Framework adapter.** Everything React + Vite-specific (plumbing files, hash router, output parsing) lives in `src/core/adapters/reactVite.ts` behind the `FrameworkAdapter` interface. The core in `src/core` never imports `vscode`, so the same loop also runs headless.

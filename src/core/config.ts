@@ -68,9 +68,9 @@ export function defaultConfig(workspaceRoot: string): HarnessConfig {
     prototypeFolder: "prototypes",
     framework: "auto",
     commands: {
-      devServer: "npx vite --config {protoDir}/vite.config.mjs --port {port} --strictPort",
-      typecheck: "npx tsc --noEmit -p {protoDir}/tsconfig.json",
-      lint: "npx eslint {protoDir}",
+      devServer: "npx --no-install vite --config {protoDir}/vite.config.mjs --port {port} --strictPort",
+      typecheck: "npx --no-install tsc --noEmit -p {protoDir}/tsconfig.json",
+      lint: "npx --no-install eslint {protoDir}",
     },
     limits: { maxFixAttempts: 3, maxReviewRounds: 3, maxTurns: 80 },
     mcp: {

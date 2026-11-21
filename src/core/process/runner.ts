@@ -23,24 +23,39 @@ function spawnCommand(cmd: ResolvedCommand, cwd: string): ChildProcess {
   return spawn(cmd.executable, cmd.args, {
     cwd,
     shell: isWindows,
-    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none", CI: "1" },
+    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", BROWSER: "none" },
     stdio: ["ignore", "pipe", "pipe"],
     detached: !isWindows, // own process group, so the whole tree can be stopped
     windowsHide: true,
   });
 }
 
-function killTree(child: ChildProcess): void {
-  if (child.exitCode !== null || child.pid === undefined) return;
-  try {
-    if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
-    } else {
-      process.kill(-child.pid, "SIGTERM");
+/**
+ * Stop a process and everything it started. On POSIX the child leads its own
+ * process group, so the group is signalled even if the direct child already
+ * exited (grandchildren such as esbuild can outlive it). SIGTERM first, SIGKILL
+ * after a grace period.
+ */
+function killTree(child: ChildProcess, graceMs = 3000): void {
+  if (child.pid === undefined) return;
+  const pid = child.pid;
+  if (process.platform === "win32") {
+    try {
+      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
+    } catch {
+      child.kill();
     }
-  } catch {
-    child.kill("SIGTERM");
+    return;
   }
+  const signalGroup = (sig: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, sig);
+    } catch {
+      // group already gone
+    }
+  };
+  signalGroup("SIGTERM");
+  setTimeout(() => signalGroup("SIGKILL"), graceMs).unref();
 }
 
 /** Run a command to completion (type check, lint). */
@@ -59,20 +74,32 @@ export function runToCompletion(
     };
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
+    let settled = false;
+    let hardStop: NodeJS.Timeout | undefined;
+    const done = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (hardStop) clearTimeout(hardStop);
+      opts.signal?.removeEventListener("abort", onAbort);
+      resolve({ exitCode: code, output, timedOut, durationMs: Date.now() - started });
+    };
+    const stop = () => {
+      killTree(child);
+      // If a grandchild keeps the pipes open, "close" may never fire: resolve anyway.
+      hardStop = setTimeout(() => done(child.exitCode), 5000);
+      hardStop.unref();
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      killTree(child);
+      stop();
     }, opts.timeoutMs ?? 180_000);
-    const onAbort = () => killTree(child);
+    const onAbort = () => stop();
     opts.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", (err) => {
       output += `\n${err.message}`;
     });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onAbort);
-      resolve({ exitCode: code, output, timedOut, durationMs: Date.now() - started });
-    });
+    child.on("close", (code) => done(code));
   });
 }
 

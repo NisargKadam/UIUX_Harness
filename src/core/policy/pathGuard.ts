@@ -75,7 +75,8 @@ const RESERVED_FILE_PATTERNS: RegExp[] = [
 ];
 
 export function isReservedFile(basename: string): boolean {
-  return RESERVED_FILE_PATTERNS.some((re) => re.test(basename));
+  const folded = basename.normalize("NFKC").toLowerCase();
+  return RESERVED_FILE_PATTERNS.some((re) => re.test(basename) || re.test(folded));
 }
 
 export function validatePrototypeName(name: string): string {
@@ -100,8 +101,62 @@ export function slugifyPrototypeName(text: string): string {
   return slug.length > 0 ? slug : "prototype";
 }
 
+/**
+ * Compare names the way a case-insensitive filesystem might: NFKC folds
+ * compatibility characters (U+017F "ſ" -> "s", U+212A Kelvin "K" -> "K") and
+ * then lower-cases. Without this, "node_moduleſ" or "pacKage.json" slip past
+ * ASCII checks while APFS/NTFS open the real thing.
+ */
+export function foldName(name: string): string {
+  return name.normalize("NFKC").toLowerCase();
+}
+
+/**
+ * Path segments the agent may *write*: ASCII letters, digits, ".", "_", "-".
+ * This rules out Unicode look-alikes and Windows 8.3 short names
+ * ("VITECO~1.MJS"), at the cost of non-ASCII file names in prototypes.
+ */
+const SAFE_WRITE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/** Folder names inside a prototype that only the harness may write to. */
+const HARNESS_ONLY_SEGMENTS = new Set([".harness"]);
+
 function isSecretLike(basename: string): boolean {
-  return SECRET_FILE_PATTERNS.some((re) => re.test(basename));
+  const folded = foldName(basename);
+  return SECRET_FILE_PATTERNS.some((re) => re.test(basename) || re.test(folded));
+}
+
+function assertSafeSegments(p: string, what: string): void {
+  for (const segment of p.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") continue;
+    if (!SAFE_WRITE_SEGMENT.test(segment)) {
+      throw new PathGuardError(
+        `Refusing ${what} "${p}": use only ASCII letters, digits, ".", "_" and "-" in file and folder names.`,
+      );
+    }
+  }
+}
+
+/** Forbidden / reserved / secret checks on the segments of a path inside the prototype. */
+function assertAllowedInside(segments: string[], allowReserved: boolean, shown: string): void {
+  segments.forEach((segment, i) => {
+    const folded = foldName(segment);
+    if (FORBIDDEN_SEGMENTS.has(folded)) {
+      throw new PathGuardError(`Refusing to write into a "${segment}" folder.`);
+    }
+    const isLast = i === segments.length - 1;
+    if (!isLast && !allowReserved && HARNESS_ONLY_SEGMENTS.has(folded)) {
+      throw new PathGuardError(`Refusing to write "${shown}": the ${segment}/ folder is managed by the harness.`);
+    }
+    if (isSecretLike(segment)) {
+      throw new PathGuardError(`Refusing to write a secrets-like file (${segment}).`);
+    }
+    if (isLast && !allowReserved && (isReservedFile(segment) || isReservedFile(folded))) {
+      throw new PathGuardError(
+        `Refusing to write "${segment}": build/lint/package config is managed by the harness, because those files are executed by the dev server and tools.`,
+      );
+    }
+  });
 }
 
 function assertCleanInput(requested: unknown): string {
@@ -145,9 +200,20 @@ function realpathOfNearestExisting(p: string): { real: string; rest: string[] } 
   }
 }
 
+function validatePrototypeFolder(folder: string): string {
+  const clean = assertCleanInput(folder);
+  assertSafeSegments(clean, "prototype folder");
+  for (const segment of clean.split("/")) {
+    if (FORBIDDEN_SEGMENTS.has(foldName(segment))) {
+      throw new PathGuardError(`The prototype folder cannot be inside "${segment}".`);
+    }
+  }
+  return clean;
+}
+
 export function prototypeDir(scope: WriteScope): string {
   validatePrototypeName(scope.prototypeName);
-  const folder = assertCleanInput(scope.prototypeFolder);
+  const folder = validatePrototypeFolder(scope.prototypeFolder);
   return path.resolve(scope.workspaceRoot, folder, scope.prototypeName);
 }
 
@@ -167,8 +233,9 @@ export function prototypeDir(scope: WriteScope): string {
  */
 export function resolveWritePath(scope: WriteScope, requested: string, opts: { allowReserved?: boolean } = {}): string {
   const clean = assertCleanInput(requested);
+  assertSafeSegments(clean, "to write");
   const root = path.resolve(scope.workspaceRoot);
-  const protoFolderAbs = path.resolve(root, assertCleanInput(scope.prototypeFolder));
+  const protoFolderAbs = path.resolve(root, validatePrototypeFolder(scope.prototypeFolder));
   const protoAbs = prototypeDir(scope);
   if (!isInside(root, protoFolderAbs) || protoFolderAbs === root) {
     throw new PathGuardError("Prototype folder must be a sub-folder of the workspace.");
@@ -183,20 +250,8 @@ export function resolveWritePath(scope: WriteScope, requested: string, opts: { a
   }
 
   const relInside = path.relative(protoAbs, target).split(path.sep);
-  for (const segment of relInside) {
-    if (FORBIDDEN_SEGMENTS.has(segment.toLowerCase())) {
-      throw new PathGuardError(`Refusing to write into a "${segment}" folder.`);
-    }
-  }
+  assertAllowedInside(relInside, opts.allowReserved === true, clean);
   const base = path.basename(target);
-  if (isSecretLike(base)) {
-    throw new PathGuardError(`Refusing to write a secrets-like file (${base}).`);
-  }
-  if (!opts.allowReserved && isReservedFile(base)) {
-    throw new PathGuardError(
-      `Refusing to write "${base}": build/lint/package config is managed by the harness, because those files are executed by the dev server and tools.`,
-    );
-  }
   const ext = path.extname(base).toLowerCase();
   if (!ALLOWED_WRITE_EXTENSIONS.has(ext)) {
     throw new PathGuardError(
@@ -224,6 +279,8 @@ export function resolveWritePath(scope: WriteScope, requested: string, opts: { a
   if (!isInside(realProto, realTarget) || realTarget === realProto) {
     throw new PathGuardError(`Refusing to write "${clean}": it resolves outside the prototype folder (symlink?).`);
   }
+  // Re-check names on the resolved path too (what the filesystem will actually open).
+  assertAllowedInside(path.relative(realProto, realTarget).split(path.sep), opts.allowReserved === true, clean);
   try {
     if (fs.lstatSync(target).isSymbolicLink()) {
       throw new PathGuardError(`Refusing to write through a symlink (${clean}).`);
@@ -250,7 +307,7 @@ export function resolveReadPath(workspaceRoot: string, requested: string): strin
   const rel = path.relative(root, target);
   for (const segment of rel.split(path.sep)) {
     if (segment === "") continue;
-    if (FORBIDDEN_SEGMENTS.has(segment.toLowerCase()) && segment !== ".vscode") {
+    if (FORBIDDEN_SEGMENTS.has(foldName(segment)) && foldName(segment) !== ".vscode") {
       throw new PathGuardError(`Refusing to read inside "${segment}".`);
     }
     if (isSecretLike(segment)) {

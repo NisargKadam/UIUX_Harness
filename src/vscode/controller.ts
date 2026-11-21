@@ -31,6 +31,10 @@ const MAX_REPLAY = 2000;
 export class Controller implements vscode.Disposable {
   private harness: Harness | undefined;
   private creating: Promise<Harness> | undefined;
+  /** The in-flight request, so a reset can wait for a stopped run to unwind. */
+  private currentRun: Promise<unknown> | undefined;
+  /** Settings or the key changed during a run: rebuild the harness before the next request. */
+  private stale = false;
   private readonly devServer = new DevServerManager();
   private catalogue: Catalogue | undefined;
   private readonly pending = new Map<string, PendingQuestion>();
@@ -174,6 +178,12 @@ export class Controller implements vscode.Disposable {
   // ------------------------------------------------------------------ lifecycle
 
   private async ensureHarness(): Promise<Harness | undefined> {
+    if (this.harness && this.stale && !this.harness.session.isRunning) {
+      const old = this.harness;
+      this.harness = undefined;
+      this.stale = false;
+      await old.dispose();
+    }
     if (this.harness) return this.harness;
     if (this.creating) return this.creating;
     const folder = this.folder;
@@ -218,10 +228,20 @@ export class Controller implements vscode.Disposable {
   }
 
   private async resetHarness(): Promise<void> {
-    if (this.harness?.session.isRunning) return; // picked up on the next request
+    if (this.harness?.session.isRunning) {
+      this.stale = true; // applied by ensureHarness before the next request
+      return;
+    }
     const h = this.harness;
     this.harness = undefined;
+    this.stale = false;
     await h?.dispose();
+  }
+
+  /** Stop any run and wait until it has fully unwound. */
+  private async stopAndWait(): Promise<void> {
+    this.stop();
+    await this.currentRun?.catch(() => undefined);
   }
 
   async pushState(): Promise<void> {
@@ -290,7 +310,13 @@ export class Controller implements vscode.Disposable {
       this.onEvent({ type: "notice", level: "info", message: "I'm still working on the last request. Stop it first, or wait for it to finish." });
       return;
     }
-    await harness.session.send(text, { figmaUrl });
+    const run = harness.session.send(text, { figmaUrl });
+    this.currentRun = run;
+    try {
+      await run;
+    } finally {
+      if (this.currentRun === run) this.currentRun = undefined;
+    }
     await this.pushState();
   }
 
@@ -316,7 +342,7 @@ export class Controller implements vscode.Disposable {
   }
 
   async newPrototype(): Promise<void> {
-    this.stop();
+    await this.stopAndWait();
     await this.resetHarness();
     this.transcript = [];
     this.chat.post({ type: "reset" });

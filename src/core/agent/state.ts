@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { FrameworkAdapter } from "../adapters/types";
 import type { HarnessConfig } from "../config";
 import { resolveWritePath, toWorkspaceRelative, validatePrototypeName, type WriteScope } from "../policy/pathGuard";
+import { prototypeRecordSchema } from "../planSchema";
 import type { MissingComponent, PrototypePlan } from "../protocol";
 
 /** Persisted next to the prototype so follow-up sessions can pick up where the last one stopped. */
@@ -86,7 +87,8 @@ export class SessionState {
   }
 
   private recordPath(): string {
-    return resolveWritePath(this.writeScope(), `${this.protoRelDir}/.harness/state.json`);
+    // .harness/ is reserved: only the harness itself writes here, never the agent.
+    return resolveWritePath(this.writeScope(), `${this.protoRelDir}/.harness/state.json`, { allowReserved: true });
   }
 
   saveRecord(): void {
@@ -101,7 +103,8 @@ export class SessionState {
   load(name: string): PrototypeRecord | undefined {
     this.prototype = validatePrototypeName(name);
     try {
-      this.record = JSON.parse(fs.readFileSync(this.recordPath(), "utf8")) as PrototypeRecord;
+      const parsed = prototypeRecordSchema.safeParse(JSON.parse(fs.readFileSync(this.recordPath(), "utf8")));
+      this.record = parsed.success ? (parsed.data as PrototypeRecord) : undefined;
     } catch {
       this.record = undefined;
     }

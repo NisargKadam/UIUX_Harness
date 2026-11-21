@@ -120,6 +120,31 @@ describe("resolveWritePath — rejected", () => {
     rejects("prototypes/settings/.babelrc");
   });
 
+  it("rejects Unicode look-alikes that a case-insensitive filesystem folds to forbidden names (review finding)", () => {
+    rejects("prototypes/settings/node_module\u017f/@vitejs/plugin-react/index.js"); // ſ (long s)
+    rejects("prototypes/settings/pac\u212Aage.json"); // Kelvin sign K
+    rejects("prototypes/settings/t\u017fconfig.json");
+    rejects("prototypes/settings/caf\u00e9.tsx"); // any non-ASCII name is refused for writes
+  });
+
+  it("rejects Windows 8.3 short names and other unsafe characters", () => {
+    rejects("prototypes/settings/VITECO~1.MJS");
+    rejects("prototypes/settings/ESLINT~1.JS");
+    rejects("prototypes/settings/a b.tsx");
+    rejects("prototypes/settings/x:y.tsx");
+  });
+
+  it("reserves the harness state folder", () => {
+    rejects("prototypes/settings/.harness/state.json");
+    rejects("prototypes/settings/.HARNESS/state.json");
+    expect(resolveWritePath(scope, "prototypes/settings/.harness/state.json", { allowReserved: true })).toBe(path.join(root, "prototypes/settings/.harness/state.json"));
+  });
+
+  it("validates the prototype folder setting itself", () => {
+    rejects("node_modules/settings/App.tsx", { ...scope, prototypeFolder: "node_modules" });
+    rejects("prot\u00f6/settings/App.tsx", { ...scope, prototypeFolder: "prot\u00f6" });
+  });
+
   it("lets the harness scaffolder write reserved plumbing with allowReserved", () => {
     expect(resolveWritePath(scope, "prototypes/settings/vite.config.mjs", { allowReserved: true })).toBe(
       path.join(root, "prototypes/settings/vite.config.mjs"),
@@ -193,6 +218,13 @@ describe("resolveReadPath", () => {
     expect(() => resolveReadPath(root, ".env")).toThrow(PathGuardError);
     expect(() => resolveReadPath(root, ".git/config")).toThrow(PathGuardError);
     expect(() => resolveReadPath(root, "node_modules/react/package.json")).toThrow(PathGuardError);
+  });
+
+  it("folds Unicode look-alikes on reads of secrets (review finding)", () => {
+    fs.writeFileSync(path.join(root, "server.Key"), "x");
+    expect(() => resolveReadPath(root, "server.\u212Aey")).toThrow(PathGuardError);
+    expect(() => resolveReadPath(root, "credential\u017f.json")).toThrow(PathGuardError);
+    expect(() => resolveReadPath(root, "node_module\u017f/react/package.json")).toThrow(PathGuardError);
   });
 
   it("rejects reads through a symlink that leaves the workspace", () => {

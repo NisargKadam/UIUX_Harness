@@ -8,8 +8,10 @@
  *  - no shell metacharacters. Commands are spawned without a shell, and on
  *    Windows (where .cmd shims need one) the check is what makes that safe
  *  - the executable must be on a short allowlist
- *  - npx / npm exec / pnpm dlx may run only allowlisted tools
- *  - node may not evaluate inline code (-e / -p / --eval / --print)
+ *  - npx / npm exec / pnpm dlx may run only allowlisted tools, given as a plain
+ *    package name (no --package/--registry flags, git/url/npm: specs)
+ *  - package managers may only `run` workspace scripts or `exec` allowlisted tools
+ *  - node may only run a bin script under node_modules/, with no node flags
  * The extension also declares itself unsupported in untrusted workspaces.
  */
 
@@ -29,8 +31,6 @@ export const ALLOWED_EXECUTABLES = new Set(["npx", "npm", "pnpm", "yarn", "bun",
 /** Tools npx / `npm exec` / `pnpm dlx` / bunx may launch. */
 export const ALLOWED_PACKAGE_TOOLS = new Set(["vite", "tsc", "typescript", "eslint", "@biomejs/biome", "biome"]);
 
-/** Package-manager subcommands that are allowed (scripts come from the workspace's package.json). */
-const ALLOWED_PM_SUBCOMMANDS = new Set(["run", "exec", "dlx", "x"]);
 
 const SHELL_METACHARACTERS = /[;&|`$<>(){}\n\r*?!#~]|\\/;
 
@@ -123,15 +123,52 @@ function baseName(executable: string): string {
   return last.replace(/\.(cmd|exe|bat|ps1)$/i, "").toLowerCase();
 }
 
-/** The tool an `npx`-style launcher runs: the first argument that is not a flag. Strips an @version suffix. */
-function launchedTool(args: string[]): string | undefined {
-  for (const arg of args) {
-    if (arg.startsWith("-")) continue;
-    // "@playwright/mcp@1.0" -> "@playwright/mcp", "vite@5" -> "vite"
-    const at = arg.lastIndexOf("@");
-    return at > 0 ? arg.slice(0, at) : arg;
+/** Flags a launcher (npx, bunx, `npm exec`, `pnpm dlx`...) may receive before the tool name. */
+// Boolean flags only. (npm parses a bare "--no" as taking the next argument as its value, so it is excluded.)
+const SAFE_LAUNCHER_FLAGS = new Set(["-y", "--yes", "--yes=false", "--no-install", "--quiet", "--silent", "--"]);
+
+/** "name", "@scope/name", optionally "@<version>" where the version is plain semver-ish (no URLs, git, npm: aliases). */
+const PACKAGE_SPEC = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@\d[0-9A-Za-z.+-]*)?$/;
+
+/**
+ * Validate a launcher invocation: only safe flags before the tool, and the tool
+ * must be a plain allowlisted package spec. Flags after the tool belong to the
+ * tool (e.g. `vite --config ...`).
+ */
+function checkLauncher(label: string, args: string[], allow: ReadonlySet<string>): void {
+  const toolIndex = args.findIndex((a) => !a.startsWith("-"));
+  for (const flag of toolIndex === -1 ? args : args.slice(0, toolIndex)) {
+    if (!SAFE_LAUNCHER_FLAGS.has(flag)) throw new CommandPolicyError(`${label}: flag "${flag}" is not allowed before the tool name.`);
   }
-  return undefined;
+  const spec = toolIndex === -1 ? undefined : args[toolIndex];
+  if (!spec || !PACKAGE_SPEC.test(spec)) {
+    throw new CommandPolicyError(`${label} must run a plain package name (optionally @version), got "${spec ?? ""}".`);
+  }
+  const at = spec.lastIndexOf("@");
+  const name = at > 0 ? spec.slice(0, at) : spec;
+  if (!allow.has(name)) throw new CommandPolicyError(`${label} may only run: ${[...allow].join(", ")} (got "${name}").`);
+}
+
+/** Subcommands each package manager may use. Scripts come from the workspace's own package.json. */
+const PM_SUBCOMMANDS: Record<string, string[]> = {
+  npm: ["run", "exec"],
+  pnpm: ["run", "exec", "dlx"],
+  yarn: ["run", "exec", "dlx"],
+  bun: ["run", "x"],
+};
+
+/**
+ * Validate a command given as executable + argv (as it will be spawned). Each
+ * element is checked on its own, so quoting tricks in a joined string cannot
+ * smuggle extra arguments.
+ */
+export function validateArgv(executable: string, args: string[], opts: { allowedPackageTools?: ReadonlySet<string> } = {}): { executable: string; args: string[] } {
+  for (const token of [executable, ...args]) {
+    if (typeof token !== "string" || token === "" || /[\s"']/.test(token) || SHELL_METACHARACTERS.test(token)) {
+      throw new CommandPolicyError(`Unsafe command argument ${JSON.stringify(token)}.`);
+    }
+  }
+  return validateCommandLine([executable, ...args].join(" "), opts);
 }
 
 /**
@@ -163,37 +200,27 @@ export function validateCommandLine(
   const toolAllowlist = opts.allowedPackageTools ?? ALLOWED_PACKAGE_TOOLS;
 
   if (exe === "npx" || exe === "bunx") {
-    const tool = launchedTool(args);
-    if (!tool || !toolAllowlist.has(tool)) {
-      throw new CommandPolicyError(`${exe} may only run: ${[...toolAllowlist].join(", ")} (got "${tool ?? ""}").`);
-    }
+    checkLauncher(exe, args, toolAllowlist);
   }
-  if (exe === "npm" || exe === "pnpm" || exe === "yarn" || exe === "bun") {
-    const sub = args.find((a) => !a.startsWith("-"));
-    if (!sub) throw new CommandPolicyError(`${exe} needs a subcommand.`);
-    if (!ALLOWED_PM_SUBCOMMANDS.has(sub)) {
-      // yarn allows `yarn <script>` shorthand; allow only when it is a bare word script name.
-      if (!(exe === "yarn" && /^[a-z0-9:_-]+$/i.test(sub) && !["add", "remove", "install", "dlx", "global", "config", "set", "up", "upgrade"].includes(sub))) {
-        throw new CommandPolicyError(`${exe} ${sub} is not allowed; use "${exe} run <script>" or "${exe} exec <tool>".`);
-      }
+  if (exe in PM_SUBCOMMANDS) {
+    const [sub, ...rest] = args;
+    if (!sub || sub.startsWith("-")) throw new CommandPolicyError(`${exe} needs a subcommand first (flags before it are not allowed).`);
+    if (!PM_SUBCOMMANDS[exe]!.includes(sub)) {
+      throw new CommandPolicyError(`${exe} ${sub} is not allowed; use ${PM_SUBCOMMANDS[exe]!.map((c) => `"${exe} ${c} …"`).join(" or ")}.`);
     }
-    if (sub === "exec" || sub === "dlx" || sub === "x") {
-      const rest = args.slice(args.indexOf(sub) + 1);
-      const tool = launchedTool(rest.filter((a) => a !== "--"));
-      if (!tool || !toolAllowlist.has(tool)) {
-        throw new CommandPolicyError(`${exe} ${sub} may only run: ${[...toolAllowlist].join(", ")}.`);
-      }
+    if (sub === "run") {
+      const script = rest[0];
+      if (!script || !/^[A-Za-z0-9:_-]+$/.test(script)) throw new CommandPolicyError(`${exe} run needs a plain script name.`);
+    } else {
+      checkLauncher(`${exe} ${sub}`, rest, toolAllowlist);
     }
   }
   if (exe === "node") {
-    // Only node's own flags (before the script) matter; later args belong to the script.
-    const scriptIndex = args.findIndex((a) => !a.startsWith("-"));
-    const nodeFlags = scriptIndex === -1 ? args : args.slice(0, scriptIndex);
-    const banned = nodeFlags.find((a) => /^(-e|-p|--eval|--print|-r|--require|--import|--loader|--experimental-loader|-i|--interactive)(=|$)/.test(a));
-    if (banned) throw new CommandPolicyError(`node ${banned} is not allowed.`);
-    const script = scriptIndex === -1 ? undefined : args[scriptIndex];
-    if (!script || script.startsWith("/") || /^[a-zA-Z]:/.test(script) || script.split("/").includes("..")) {
-      throw new CommandPolicyError("node must run a workspace-relative script.");
+    // node may only run a tool's own bin script from node_modules (which the agent cannot write), with no node flags.
+    const script = args[0];
+    if (!script || script.startsWith("-")) throw new CommandPolicyError("node flags are not allowed; give a script path first.");
+    if (!/^node_modules\/[A-Za-z0-9@._/-]+$/.test(script) || script.split("/").includes("..")) {
+      throw new CommandPolicyError("node may only run a script under node_modules/ (e.g. node_modules/typescript/bin/tsc).");
     }
   }
   return { executable, args };

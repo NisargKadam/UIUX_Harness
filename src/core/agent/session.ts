@@ -139,24 +139,29 @@ export class AgentSession {
     let fixAttempts = 0;
     let reviewNudged = false;
     let lastText = "";
-    this.state.startRequest();
-    if (this.state.record) {
-      this.state.record.feedback.push(text);
-    }
-
-    host.emit({ type: "run_state", state: "running", prototype: this.state.prototype });
-    const phase = this.activity(this.state.prototype ? "Working on your feedback" : "Reading your brief");
-    this.messages.push({ role: "user", content: [{ type: "text", text: this.composeUserTurn(text, opts.figmaUrl) }] });
+    let phase: { done: (ok?: boolean) => void } | undefined;
 
     const finish = (outcome: RunOutcome["outcome"], summary = lastText): RunOutcome => {
-      phase.done(outcome === "done");
-      this.state.saveRecord();
+      phase?.done(outcome === "done");
+      try {
+        this.state.saveRecord();
+      } catch (err) {
+        host.log(`could not save prototype state: ${(err as Error).message}`);
+      }
       host.emit({ type: "run_finished", outcome, summary });
       host.emit({ type: "run_state", state: "idle", prototype: this.state.prototype });
       return { outcome, summary, turns, usage };
     };
 
+    // Everything after `this.controller` is set runs inside try/finally, so a
+    // failure here can never leave the session stuck in "running".
     try {
+      this.state.startRequest();
+      this.state.record?.feedback.push(text);
+      host.emit({ type: "run_state", state: "running", prototype: this.state.prototype });
+      phase = this.activity(this.state.prototype ? "Working on your feedback" : "Reading your brief");
+      this.messages.push({ role: "user", content: [{ type: "text", text: this.composeUserTurn(text, opts.figmaUrl) }] });
+
       for (;;) {
         if (controller.signal.aborted) return finish("stopped");
         if (turns >= config.limits.maxTurns) {
@@ -292,7 +297,7 @@ export class AgentSession {
         output = { content: toolErrorMessage(err), isError: true };
       }
       act.done(!output.isError);
-      if (use.name.startsWith("playwright__") && /screenshot|snapshot/.test(use.name)) {
+      if (!output.isError && use.name.startsWith("playwright__") && /screenshot|snapshot/.test(use.name)) {
         this.state.lastReviewSeq = this.state.writeSeq;
       }
       results.push({ type: "tool_result", tool_use_id: use.id, content: output.content, is_error: output.isError || undefined });

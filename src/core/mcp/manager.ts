@@ -6,6 +6,7 @@
  * comes from and names cannot collide.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,7 +15,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { HarnessConfig } from "../config";
-import { validateCommandLine } from "../policy/commandPolicy";
+import { validateArgv } from "../policy/commandPolicy";
 import type { ConnectionStatus } from "../protocol";
 import type { Catalogue } from "../catalogue/types";
 import { createCatalogueServer } from "./catalogueServer";
@@ -37,21 +38,53 @@ const MAX_IMAGES = 3;
 const SUPPORTED_IMAGES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 /**
- * Per-server tool filters. The harness only *reads* from Figma ("get_*",
- * "search_*", "whoami"), so canvas-writing tools never reach the model. From
- * Playwright, tools that execute arbitrary code in the MCP server process or
- * read local files are dropped; self-review only needs navigation, clicks,
- * snapshots and screenshots.
+ * Per-server tool allow-lists (deny by default):
+ * - Figma: read tools only ("get_*", "search_*", "whoami"). Nothing that writes to the canvas.
+ * - Playwright: navigation, interaction and inspection only. No code evaluation,
+ *   file upload, storage or network dumps. Its file-writing `filename` parameter
+ *   is stripped too (see PLAYWRIGHT_STRIPPED_PARAMS), because Playwright MCP
+ *   lets it write anywhere under its working directory.
+ * - Catalogue: the built-in tools, plus Storybook's read-only docs/story lookups.
+ *   Storybook's test-run and review tools would execute project code.
  */
+const PLAYWRIGHT_TOOLS = new Set([
+  "browser_navigate",
+  "browser_navigate_back",
+  "browser_click",
+  "browser_type",
+  "browser_fill_form",
+  "browser_select_option",
+  "browser_hover",
+  "browser_press_key",
+  "browser_handle_dialog",
+  "browser_snapshot",
+  "browser_take_screenshot",
+  "browser_wait_for",
+  "browser_resize",
+  "browser_tabs",
+  "browser_console_messages",
+  "browser_close",
+]);
+const PLAYWRIGHT_STRIPPED_PARAMS = ["filename"];
+
 export function isToolAllowed(server: ServerKey, tool: string): boolean {
   switch (server) {
     case "figma":
       return /^(get_|search_)/.test(tool) || tool === "whoami";
     case "playwright":
-      return !["browser_run_code_unsafe", "browser_file_upload", "browser_install"].includes(tool);
+      return PLAYWRIGHT_TOOLS.has(tool);
     case "catalogue":
-      return true;
+      return ["list_components", "get_component", "list_tokens"].includes(tool) || /^(docs-|get-|list-|stories-find)/.test(tool);
   }
+}
+
+/** Remove parameters the harness never lets the model pass (from a JSON schema). */
+export function stripParams(server: ServerKey, schema: Record<string, unknown>): Record<string, unknown> {
+  if (server !== "playwright") return schema;
+  const props = { ...((schema.properties as Record<string, unknown> | undefined) ?? {}) };
+  for (const p of PLAYWRIGHT_STRIPPED_PARAMS) delete props[p];
+  const required = Array.isArray(schema.required) ? (schema.required as string[]).filter((r) => !PLAYWRIGHT_STRIPPED_PARAMS.includes(r)) : schema.required;
+  return { ...schema, properties: props, ...(required ? { required } : {}) };
 }
 
 function toolName(server: ServerKey, original: string): string {
@@ -85,6 +118,7 @@ export class McpManager {
   private bindings = new Map<string, Binding>();
   private clients: Client[] = [];
   private statuses: ConnectionStatus[] = [];
+  private playwrightDir: string | undefined;
 
   constructor(
     private readonly config: HarnessConfig,
@@ -112,10 +146,13 @@ export class McpManager {
     await withTimeout(client.connect(transport), timeoutMs, `Connecting to ${server}`);
     this.clients.push(client);
     const listed = await withTimeout(client.listTools(), timeoutMs, `Listing ${server} tools`);
+    let allowed = 0;
     for (const tool of listed.tools) {
       if (!isToolAllowed(server, tool.name)) continue;
+      allowed++;
       const name = toolName(server, tool.name);
-      const { $schema: _ignored, ...schema } = (tool.inputSchema ?? { type: "object" }) as Record<string, unknown>;
+      const { $schema: _ignored, ...raw } = (tool.inputSchema ?? { type: "object" }) as Record<string, unknown>;
+      const schema = stripParams(server, raw);
       this.bindings.set(name, {
         server,
         name,
@@ -129,7 +166,7 @@ export class McpManager {
         },
       });
     }
-    return listed.tools.length;
+    return allowed;
   }
 
   private async connectFigma(): Promise<ConnectionStatus> {
@@ -183,11 +220,14 @@ export class McpManager {
     }
     try {
       // Same allowlist rules as run_command, with the MCP package as the only allowed tool.
-      validateCommandLine([cfg.command, ...cfg.args].join(" "), { allowedPackageTools: new Set(["@playwright/mcp"]) });
+      validateArgv(cfg.command, cfg.args, { allowedPackageTools: new Set(["@playwright/mcp"]) });
+      // Run it in a throwaway folder: Playwright MCP confines file output to its
+      // working directory, so this keeps it out of the workspace entirely.
+      this.playwrightDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "uiux-harness-playwright-"));
       const transport = new StdioClientTransport({
         command: cfg.command,
         args: cfg.args,
-        cwd: this.config.workspaceRoot,
+        cwd: this.playwrightDir,
         stderr: "pipe",
       });
       const count = await this.attach("playwright", transport, 90_000);
@@ -218,6 +258,9 @@ export class McpManager {
   async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ content: ToolResultContent; isError: boolean }> {
     const binding = this.bindings.get(name);
     if (!binding) return { content: [{ type: "text", text: `Unknown tool ${name}` }], isError: true };
+    if (binding.server === "playwright" && PLAYWRIGHT_STRIPPED_PARAMS.some((p) => p in args)) {
+      return { content: [{ type: "text", text: "Saving browser output to files is not allowed. Omit `filename`; results come back inline." }], isError: true };
+    }
     const result = await binding.client.callTool({ name: binding.original, arguments: args }, undefined, {
       signal,
       timeout: 120_000,
@@ -229,6 +272,8 @@ export class McpManager {
     await Promise.allSettled(this.clients.map((c) => c.close()));
     this.clients = [];
     this.bindings.clear();
+    if (this.playwrightDir) fs.rmSync(this.playwrightDir, { recursive: true, force: true });
+    this.playwrightDir = undefined;
   }
 }
 

@@ -167,17 +167,17 @@
         },
         "uiuxHarness.devServerCommand": {
           "type": "string",
-          "default": "npx vite --config {protoDir}/vite.config.mjs --port {port} --strictPort",
+          "default": "npx --no-install vite --config {protoDir}/vite.config.mjs --port {port} --strictPort",
           "markdownDescription": "Command that starts the prototype dev server. Placeholders: `{protoDir}` (workspace-relative prototype folder), `{port}`. Runs without a shell; only allowlisted executables are accepted."
         },
         "uiuxHarness.typecheckCommand": {
           "type": "string",
-          "default": "npx tsc --noEmit -p {protoDir}/tsconfig.json",
+          "default": "npx --no-install tsc --noEmit -p {protoDir}/tsconfig.json",
           "description": "Type-check command. Placeholder: {protoDir}."
         },
         "uiuxHarness.lintCommand": {
           "type": "string",
-          "default": "npx eslint {protoDir}",
+          "default": "npx --no-install eslint {protoDir}",
           "description": "Lint command. Placeholder: {protoDir}. Leave empty to skip linting."
         },
         "uiuxHarness.maxFixAttempts": {
