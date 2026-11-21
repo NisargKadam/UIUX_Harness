@@ -1,0 +1,300 @@
+{
+  "name": "uiux-harness",
+  "displayName": "UIUX Harness",
+  "description": "Turn a design brief or Figma frame into a clickable prototype built from your real component library, previewed live inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "nisargkadam",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NisargKadam/UIUX_Harness.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "prototype",
+    "design system",
+    "figma",
+    "ux",
+    "agent"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "UIUX Harness runs your dev server, type checker and linter, so it needs a trusted workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "uiuxHarness",
+          "title": "UIUX Harness",
+          "icon": "media/harness.svg"
+        }
+      ]
+    },
+    "views": {
+      "uiuxHarness": [
+        {
+          "type": "webview",
+          "id": "uiuxHarness.chat",
+          "name": "Chat"
+        },
+        {
+          "id": "uiuxHarness.activity",
+          "name": "What's happening",
+          "size": 1
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "uiuxHarness.setApiKey",
+        "title": "Set Anthropic API key",
+        "category": "UIUX Harness"
+      },
+      {
+        "command": "uiuxHarness.clearApiKey",
+        "title": "Remove stored Anthropic API key",
+        "category": "UIUX Harness"
+      },
+      {
+        "command": "uiuxHarness.openPreview",
+        "title": "Open prototype preview",
+        "category": "UIUX Harness"
+      },
+      {
+        "command": "uiuxHarness.newPrototype",
+        "title": "Start a new prototype",
+        "category": "UIUX Harness"
+      },
+      {
+        "command": "uiuxHarness.reindexComponents",
+        "title": "Re-scan component library",
+        "category": "UIUX Harness"
+      },
+      {
+        "command": "uiuxHarness.stop",
+        "title": "Stop the current run",
+        "category": "UIUX Harness"
+      },
+      {
+        "command": "uiuxHarness.showConnections",
+        "title": "Show connection status (Figma, catalogue, Playwright)",
+        "category": "UIUX Harness"
+      }
+    ],
+    "configuration": {
+      "title": "UIUX Harness",
+      "properties": {
+        "uiuxHarness.model": {
+          "type": "string",
+          "default": "claude-opus-5-5",
+          "markdownDescription": "Claude model ID used by the agent. The API key is **not** a setting: run *UIUX Harness: Set Anthropic API key* (stored in VS Code SecretStorage)."
+        },
+        "uiuxHarness.effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "high",
+          "description": "How hard the model thinks per step. Higher is slower and costs more, and builds are usually better."
+        },
+        "uiuxHarness.refusalFallback": {
+          "type": "boolean",
+          "default": true,
+          "description": "If the model declines a request on safety grounds, let the API retry it on a fallback model (server-side fallbacks)."
+        },
+        "uiuxHarness.componentLibraryPath": {
+          "type": "string",
+          "default": "src/components",
+          "description": "Workspace-relative folder containing your component library. Scanned to build the component catalogue when Storybook is not available."
+        },
+        "uiuxHarness.componentImport": {
+          "type": "string",
+          "default": "@ds",
+          "description": "Import specifier prototypes use for the component library (e.g. `import { Button } from \"@ds\"`). The harness maps it to componentLibraryPath."
+        },
+        "uiuxHarness.tokensPath": {
+          "type": "string",
+          "default": "src/tokens",
+          "description": "Workspace-relative file or folder with design tokens (CSS custom properties or a TS/JSON token object)."
+        },
+        "uiuxHarness.globalStyles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "src/tokens/tokens.css"
+          ],
+          "description": "Workspace-relative stylesheets every prototype imports (tokens, resets, fonts)."
+        },
+        "uiuxHarness.storybookUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Storybook URL (e.g. `http://localhost:6006`). When set, or when a `.storybook/` folder exists, the harness tries the Storybook MCP endpoint (`<url>/mcp`) for the catalogue and falls back to the built-in indexer."
+        },
+        "uiuxHarness.prototypeFolder": {
+          "type": "string",
+          "default": "prototypes",
+          "description": "Workspace-relative folder prototypes are written into. The agent cannot write anywhere else."
+        },
+        "uiuxHarness.framework": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "react-vite"
+          ],
+          "default": "auto",
+          "description": "Framework adapter. 'auto' detects from package.json."
+        },
+        "uiuxHarness.devServerCommand": {
+          "type": "string",
+          "default": "npx vite --config {protoDir}/vite.config.mjs --port {port} --strictPort",
+          "markdownDescription": "Command that starts the prototype dev server. Placeholders: `{protoDir}` (workspace-relative prototype folder), `{port}`. Runs without a shell; only allowlisted executables are accepted."
+        },
+        "uiuxHarness.typecheckCommand": {
+          "type": "string",
+          "default": "npx tsc --noEmit -p {protoDir}/tsconfig.json",
+          "description": "Type-check command. Placeholder: {protoDir}."
+        },
+        "uiuxHarness.lintCommand": {
+          "type": "string",
+          "default": "npx eslint {protoDir}",
+          "description": "Lint command. Placeholder: {protoDir}. Leave empty to skip linting."
+        },
+        "uiuxHarness.maxFixAttempts": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "How many times the agent may retry fixing type/lint errors before reporting what is still broken."
+        },
+        "uiuxHarness.maxReviewRounds": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "How many self-review rounds (screenshot → compare → fix) the agent may run per request."
+        },
+        "uiuxHarness.maxTurns": {
+          "type": "number",
+          "default": 80,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "Hard cap on model calls per request, as a safety net against runaway loops."
+        },
+        "uiuxHarness.mcp.figma": {
+          "type": "object",
+          "default": {
+            "enabled": true,
+            "url": "http://127.0.0.1:3845/mcp"
+          },
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "markdownDescription": "Figma MCP server. The default is the Figma desktop app's local server (enable *Dev Mode → MCP server* in Figma desktop). The remote server `https://mcp.figma.com/mcp` needs OAuth. See the README."
+        },
+        "uiuxHarness.mcp.storybook": {
+          "type": "object",
+          "default": {
+            "enabled": true
+          },
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "markdownDescription": "Storybook MCP. `url` defaults to `<storybookUrl>/mcp`."
+        },
+        "uiuxHarness.mcp.playwright": {
+          "type": "object",
+          "default": {
+            "enabled": true,
+            "command": "npx",
+            "args": [
+              "-y",
+              "@playwright/mcp@0.0.86",
+              "--headless",
+              "--isolated",
+              "--viewport-size",
+              "1280x800"
+            ]
+          },
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Playwright MCP server used for self-review screenshots and click-through."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/webview/tsconfig.json",
+    "lint": "eslint src test scripts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "tsx scripts/smoke-plumbing.ts",
+    "e2e": "tsx scripts/run-headless.ts",
+    "verify-prototype": "tsx scripts/verify-prototype.ts",
+    "package": "npm run build && vsce package --no-dependencies",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "diff": "^9.0.0",
+    "typescript": "^5.9.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "1.95.0",
+    "@vscode/vsce": "^4.1.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "playwright": "^1.65.1",
+    "tsx": "^4.23.15",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.1"
+  }
+}
