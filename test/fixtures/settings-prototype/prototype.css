@@ -1,0 +1,10 @@
+/* Page layout only, using tokens. */
+.page {
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+}
+
+.field-half {
+  flex: 1 1 260px;
+  min-width: 0;
+}
