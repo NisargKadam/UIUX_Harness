@@ -243,7 +243,9 @@
               "--headless",
               "--isolated",
               "--viewport-size",
-              "1280x800"
+              "1280x800",
+              "--output-dir",
+              ".uiux-harness/playwright"
             ]
           },
           "properties": {
@@ -274,6 +276,7 @@
     "test:watch": "vitest",
     "smoke": "tsx scripts/smoke-plumbing.ts",
     "e2e": "tsx scripts/run-headless.ts",
+    "e2e:scripted": "tsx scripts/e2e-scripted.ts",
     "verify-prototype": "tsx scripts/verify-prototype.ts",
     "package": "npm run build && vsce package --no-dependencies",
     "vscode:prepublish": "npm run build"

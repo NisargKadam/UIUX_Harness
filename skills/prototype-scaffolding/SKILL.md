@@ -39,7 +39,7 @@ the app state in `App.tsx` makes cross-screen behaviour obvious.
 ## Routing
 
 Use the router the harness wrote (`./router`): `Router`, `navigate`, `Link`,
-`usePath`, `matchPath`. Every screen in the plan gets the route from the plan.
+`Redirect`, `usePath`, `matchPath`. Every screen in the plan gets the route from the plan.
 
 - Tabs and sub-sections are routes (`/settings/:tab`). The selected tab comes
   **from the URL**, and changing the tab calls `navigate(...)`. That way the browser
@@ -47,8 +47,10 @@ Use the router the harness wrote (`./router`): `Router`, `navigate`, `Link`,
   the user's place.
 - Unknown routes fall back to the first route, so the preview never shows a
   blank page. Put the landing screen first.
-- Use `navigate()` for buttons that move between screens and `<Link>` for
-  text links.
+- Use `navigate()` in event handlers (buttons that move between screens),
+  `<Link>` for text links, and `<Redirect to="…" />` to send an invalid route
+  somewhere valid. Never call `navigate()` during render: it fires before the
+  router is listening, and the page stays blank.
 
 ## State and mock data
 
@@ -109,7 +111,7 @@ Plan: Settings with Profile (`/settings/profile`) and Notifications
 `App.tsx`:
 
 ```tsx
-import { Router, navigate } from "./router";
+import { Redirect, Router } from "./router";
 import { SettingsScreen, type SettingsTab } from "./screens/SettingsScreen";
 
 const TABS: SettingsTab[] = ["profile", "notifications"];
@@ -127,11 +129,6 @@ export function App() {
       ]}
     />
   );
-}
-
-function Redirect({ to }: { to: string }) {
-  queueMicrotask(() => navigate(to, { replace: true }));
-  return null;
 }
 ```
 

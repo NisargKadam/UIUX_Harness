@@ -17,6 +17,7 @@ coverage/
 
 # Harness runtime state (catalogue cache, run logs, screenshots)
 .uiux-harness/
+.playwright-mcp/
 
 # Generated prototypes in the sample workspace (examples are committed explicitly)
 sample-workspace/prototypes/*

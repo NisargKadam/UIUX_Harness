@@ -79,7 +79,7 @@ export function defaultConfig(workspaceRoot: string): HarnessConfig {
       playwright: {
         enabled: true,
         command: "npx",
-        args: ["-y", "@playwright/mcp@0.0.86", "--headless", "--isolated", "--viewport-size", "1280x800"],
+        args: ["-y", "@playwright/mcp@0.0.86", "--headless", "--isolated", "--viewport-size", "1280x800", "--output-dir", ".uiux-harness/playwright"],
       },
     },
   };

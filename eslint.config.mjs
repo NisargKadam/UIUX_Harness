@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "sample-workspace/**", "esbuild.mjs"] },
+  { ignores: ["dist/**", "node_modules/**", "sample-workspace/**", "test/fixtures/**", "esbuild.mjs"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -74,9 +74,20 @@ export function usePath(): string {
   useEffect(() => {
     const onChange = () => setPath(currentPath());
     window.addEventListener("hashchange", onChange);
+    // Catch navigations that happened between the first render and this effect
+    // (e.g. a redirect), whose hashchange event fired before we subscribed.
+    onChange();
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
   return path;
+}
+
+/** Replace the current route, e.g. <Redirect to="/settings/profile" />. */
+export function Redirect({ to }: { to: string }) {
+  useEffect(() => {
+    navigate(to, { replace: true });
+  }, [to]);
+  return null;
 }
 
 /** Match "/settings/:tab" against "/settings/profile" -> { tab: "profile" }. */
@@ -104,9 +115,7 @@ export function Router({ routes, fallback }: { routes: Route[]; fallback?: React
   }
   if (fallback !== undefined) return <>{fallback}</>;
   const first = routes[0];
-  if (first && !first.path.includes(":") && !first.path.includes("*")) {
-    queueMicrotask(() => navigate(first.path, { replace: true }));
-  }
+  if (first && !first.path.includes(":") && !first.path.includes("*")) return <Redirect to={first.path} />;
   return null;
 }
 
@@ -247,7 +256,7 @@ You write:
 - Optional ${protoRelDir}/parts/<Name>.tsx: prototype-local compositions built only from catalogue components (e.g. a SettingsLayout made from Stack + Card). Never a new visual primitive.
 - Optional ${protoRelDir}/prototype.css: page-level layout only (max-width container, grid areas), using tokens (var(--space-4)), never raw colours.
 
-Routing (from "./router"): Router, Link, navigate(path), usePath(), matchPath(). Hash URLs such as #/settings/notifications.
+Routing (from "./router"): Router, Link, Redirect, navigate(path), usePath(), matchPath(). Hash URLs such as #/settings/notifications.
 Tabs and sub-views that a stakeholder might link to get their own route (/settings/:tab) so every state is reachable by URL.
 Imports: components from "${config.componentImport}"; React hooks from "react". No other packages are installed for prototypes.`;
   }
