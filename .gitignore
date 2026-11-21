@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+*.vsix
+coverage/
+.vscode-test/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Harness runtime state (catalogue cache, run logs, screenshots)
+.uiux-harness/
+
+# Generated prototypes in the sample workspace (examples are committed explicitly)
+sample-workspace/prototypes/*
+!sample-workspace/prototypes/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
