@@ -5,7 +5,13 @@ import { Controller } from "./vscode/controller";
 import { PreviewPanel } from "./vscode/previewPanel";
 import { ApiKeyStore } from "./vscode/secrets";
 
-export function activate(context: vscode.ExtensionContext): { controller: Controller } {
+export interface HarnessExtensionApi {
+  controller: Controller;
+  keys: ApiKeyStore;
+  preview: PreviewPanel;
+}
+
+export function activate(context: vscode.ExtensionContext): HarnessExtensionApi {
   const output = vscode.window.createOutputChannel("UIUX Harness");
   const chat = new ChatView(context.extensionUri);
   const preview = new PreviewPanel(context.extensionUri);
@@ -28,7 +34,7 @@ export function activate(context: vscode.ExtensionContext): { controller: Contro
     vscode.commands.registerCommand("uiuxHarness.showConnections", () => controller.showConnections()),
   );
   // Returned for integration tests.
-  return { controller };
+  return { controller, keys, preview };
 }
 
 export function deactivate(): void {

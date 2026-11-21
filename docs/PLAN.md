@@ -71,3 +71,23 @@ Each slice ends with a commit on `feat/uiux-harness`. A PR to `main` follows sli
   with working tab navigation (checked by Playwright).
 - README: install, configuration, the three MCP setups, a five-minute walkthrough.
 - No secrets in the repo. `.gitignore` covers node_modules, build output and `.env`.
+
+## Status (2026-11-21)
+
+All five slices are implemented. The code was written in one pass and committed
+as a single foundation commit, not one commit per slice (see the PR
+description). Verification:
+
+| Check | Command | Result |
+|---|---|---|
+| Unit tests: path guard, command allowlist, indexer, MCP filters, diagnostics merge, Figma URLs, labels, adapter, skills | `npm test` | 92 passing |
+| Plumbing without a model | `npm run smoke` | pass |
+| Real agent loop + tools + catalogue & Playwright MCP, scripted model | `npm run e2e:scripted` | 31/31 |
+| Independent check of the generated settings prototype | `npm run verify-prototype` | 19/19 |
+| Inside VS Code 1.147 (extension host) | `npm run test:vscode` | 9/9 |
+| **Real model run** (`npm run e2e`) | needs an API key | **not run**: no key was available |
+
+Not verified: Storybook MCP against a live Storybook, and Figma MCP against the
+Figma desktop app (neither was available here). Visual rendering inside the
+VS Code webview itself was not checked either. The preview panel's exact HTML
+and CSP were rendered in Chromium instead.

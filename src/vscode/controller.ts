@@ -142,34 +142,20 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * Editor diagnostics for prototype files. VS Code's TypeScript server only
-   * reports on open documents, so the prototype's files are opened (without
-   * showing them), and we wait briefly for diagnostics to settle.
+   * What VS Code's language extensions currently report for prototype files
+   * (ESLint, CSS, and TypeScript for files open in an editor). VS Code's
+   * TypeScript service only checks files visible in an editor, and the harness
+   * keeps code out of the designer's way, so the get_diagnostics tool merges
+   * this with a type-checker run over the whole prototype.
    */
-  private async collectDiagnostics(protoRelDir: string, signal: AbortSignal): Promise<Diagnostic[] | undefined> {
+  private async collectDiagnostics(protoRelDir: string, _signal: AbortSignal): Promise<Diagnostic[] | undefined> {
     const folder = this.folder;
     if (!folder) return undefined;
-    const pattern = new vscode.RelativePattern(folder, `${protoRelDir}/**/*.{ts,tsx,css}`);
-    const uris = (await vscode.workspace.findFiles(pattern, "**/{node_modules,dist}/**", 200)).filter((u) => !u.fsPath.includes(`${path.sep}.harness${path.sep}`));
-    if (uris.length === 0) return [];
-    const settled = new Promise<void>((resolve) => {
-      let timer = setTimeout(resolve, 2500);
-      const sub = vscode.languages.onDidChangeDiagnostics((e) => {
-        if (e.uris.some((u) => uris.some((x) => x.toString() === u.toString()))) {
-          clearTimeout(timer);
-          timer = setTimeout(() => {
-            sub.dispose();
-            resolve();
-          }, 700);
-        }
-      });
-      signal.addEventListener("abort", () => resolve(), { once: true });
-    });
-    await Promise.all(uris.map((u) => vscode.workspace.openTextDocument(u).then(undefined, () => undefined)));
-    await settled;
+    const prefix = path.join(folder.uri.fsPath, protoRelDir) + path.sep;
     const out: Diagnostic[] = [];
-    for (const uri of uris) {
-      for (const d of vscode.languages.getDiagnostics(uri)) {
+    for (const [uri, diagnostics] of vscode.languages.getDiagnostics()) {
+      if (uri.scheme !== "file" || !uri.fsPath.startsWith(prefix)) continue;
+      for (const d of diagnostics) {
         if (d.severity === vscode.DiagnosticSeverity.Hint) continue;
         out.push({
           file: path.relative(folder.uri.fsPath, uri.fsPath).split(path.sep).join("/"),

@@ -37,6 +37,11 @@ export class ApiKeyStore {
     return true;
   }
 
+  /** Store a key directly (used by the command flow above and by integration tests). */
+  async store(value: string): Promise<void> {
+    await this.secrets.store(KEY, value.trim());
+  }
+
   async clear(): Promise<void> {
     await this.secrets.delete(KEY);
   }

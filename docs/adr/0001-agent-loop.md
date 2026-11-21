@@ -61,7 +61,7 @@ plus `finalMessage()`), not the beta Tool Runner.
 
 | Agent SDK feature | Replacement here |
 |---|---|
-| MCP client | `@modelcontextprotocol/sdk` client (stdio + streamable HTTP), in `src/core/mcp/manager.ts` |
+| MCP client | `@modelcontextprotocol/sdk` v1 client (stdio + streamable HTTP), in `src/core/mcp/manager.ts`. The newer `@modelcontextprotocol/client` v2 line is stable now, and moving to it later only changes imports. |
 | Skills loader | `src/core/skills/loader.ts` reads `skills/*/SKILL.md` (frontmatter + body), and a workspace `.uiux-harness/skills/` can override them |
 | Context management | Server-side prompt caching (top-level `cache_control`). Large tool results are truncated before they enter history |
 | Built-in file tools | Our own `read_file` / `write_file`, scoped on purpose |

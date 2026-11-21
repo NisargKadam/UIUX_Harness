@@ -1,8 +1,12 @@
 // Bundles the extension host code (CommonJS, Node) and the webview scripts (browser IIFE).
+import * as fs from "node:fs";
 import * as esbuild from "esbuild";
 
 const watch = process.argv.includes("--watch");
 const production = process.argv.includes("--production");
+
+// Production builds start clean so stale source maps and test shims never ship.
+if (production) fs.rmSync("dist", { recursive: true, force: true });
 
 const common = {
   bundle: true,

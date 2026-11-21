@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import { createTwoFilesPatch } from "diff";
 import { z } from "zod";
-import type { FrameworkAdapter } from "../adapters/types";
+import type { Diagnostic, FrameworkAdapter } from "../adapters/types";
 import type { HarnessConfig } from "../config";
 import type { HarnessHost } from "../host";
 import { COMMAND_NAMES, resolveCommand } from "../policy/commandPolicy";
@@ -187,20 +187,39 @@ const diagnosticsSchema = z.object({ activity });
 const getDiagnostics: BuiltinTool<typeof diagnosticsSchema> = {
   name: "get_diagnostics",
   description:
-    "Problems VS Code currently reports for files in the active prototype (TypeScript, ESLint and CSS extensions). Faster than a full type check after small edits.",
+    "All known problems in the active prototype: what VS Code's extensions report (ESLint, CSS, TypeScript for open files) merged with a full type-checker run, so nothing is missed. Use after edits, before reviewing.",
   schema: diagnosticsSchema,
   async run(_input, ctx) {
     const protoRelDir = ctx.state.protoRelDir;
     if (!protoRelDir) return { content: "No prototype is active yet.", isError: true };
-    const fromEditor = await ctx.host.getDiagnostics(protoRelDir, ctx.signal);
-    if (fromEditor === undefined) {
-      const result = await runCheck("typecheck", ctx.config, ctx.adapter, protoRelDir, ctx.signal);
-      return { content: `(Editor diagnostics not available here; ran the type checker instead.)\n${formatCheck(result)}` };
+    const [fromEditor, typecheck] = await Promise.all([
+      ctx.host.getDiagnostics(protoRelDir, ctx.signal),
+      runCheck("typecheck", ctx.config, ctx.adapter, protoRelDir, ctx.signal),
+    ]);
+    const merged = mergeDiagnostics(fromEditor ?? [], typecheck.inPrototype);
+    if (typecheck.passed && typecheck.ran) ctx.state.lastCleanCheckSeq = ctx.state.writeSeq;
+    const sources = `${fromEditor === undefined ? "editor diagnostics unavailable here" : `${fromEditor.length} from the editor`}, ${typecheck.ran ? `${typecheck.inPrototype.length} from the type checker` : "type checker skipped"}`;
+    if (merged.length === 0) {
+      const failedWithoutDetail = typecheck.ran && !typecheck.passed;
+      return { content: failedWithoutDetail ? formatCheck(typecheck) : `No problems in the prototype (${sources}).`, isError: failedWithoutDetail };
     }
-    if (fromEditor.length === 0) return { content: "No problems reported in the prototype." };
-    return { content: formatDiagnostics(fromEditor, 60) };
+    const errors = merged.filter((d) => d.severity === "error").length;
+    return { content: `${errors} error(s), ${merged.length - errors} warning(s) (${sources}):\n${formatDiagnostics(merged, 60)}`, isError: errors > 0 };
   },
 };
+
+/** Merge editor and type-checker diagnostics, dropping duplicates of the same problem. */
+export function mergeDiagnostics(a: Diagnostic[], b: Diagnostic[]): Diagnostic[] {
+  const seen = new Set<string>();
+  const out: Diagnostic[] = [];
+  for (const d of [...a, ...b]) {
+    const key = `${d.file}:${d.line}:${d.column}:${d.message.slice(0, 80)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out.sort((x, y) => x.file.localeCompare(y.file) || x.line - y.line);
+}
 
 // ------------------------------------------------------------------ preview
 
